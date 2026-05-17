@@ -8,6 +8,7 @@ library(PerformanceAnalytics)
 library(dplyr)
 library(httr)
 library(jsonlite)
+library(purrr)
 
 # Core Calculation 
 
@@ -21,50 +22,34 @@ financials_clean <- financials_clean %>%
 
 print(financials_clean)
 
-# Forecast Future FCFF 
+# Bullish market-based FCFF forecast
 
 
 forecast_years <- 5
-
-# Historical assumptions
 last_year <- max(as.numeric(financials_clean$year), na.rm = TRUE)
 last_revenue <- financials_clean %>% slice_tail(n = 1) %>% pull(revenue)
 
-revenue_first <- financials_clean %>% slice_head(n = 1) %>% pull(revenue)
-revenue_last  <- financials_clean %>% slice_tail(n = 1) %>% pull(revenue)
-n_periods <- nrow(financials_clean) - 1
-
-revenue_cagr <- (revenue_last / revenue_first)^(1 / n_periods) - 1
-
-ebit_margin <- financials_clean %>%
-  summarise(value = mean(ebit / revenue, na.rm = TRUE)) %>%
-  pull(value)
-
-tax_rate_avg <- financials_clean %>%
-  summarise(value = mean(tax_rate, na.rm = TRUE)) %>%
-  pull(value)
-
-depreciation_ratio <- financials_clean %>%
-  summarise(value = mean(depreciation / revenue, na.rm = TRUE)) %>%
-  pull(value)
-
-capex_ratio <- financials_clean %>%
-  summarise(value = mean(capex / revenue, na.rm = TRUE)) %>%
-  pull(value)
-
-wc_ratio <- financials_clean %>%
-  summarise(value = mean(change_wc / revenue, na.rm = TRUE)) %>%
-  pull(value)
-
-# Forecast table
 forecast_tbl <- tibble(
   year = (last_year + 1):(last_year + forecast_years),
-  forecast_index = 1:forecast_years
+  forecast_index = 1:forecast_years,
+  
+  # Revenue growth: bullish, but tapering toward maturity
+  revenue_growth = c(0.08, 0.07, 0.06, 0.05, 0.04),
+  
+  # Margin expansion: slight improvement, not unrealistic
+  ebit_margin = c(0.31, 0.315, 0.320, 0.322, 0.325),
+  
+  # Stable effective tax rate
+  tax_rate = c(0.17, 0.17, 0.17, 0.17, 0.17),
+  
+  # Reinvestment assumptions
+  depreciation_ratio = c(0.025, 0.025, 0.024, 0.024, 0.023),
+  capex_ratio        = c(0.030, 0.029, 0.028, 0.028, 0.027),
+  wc_ratio           = c(0.010, 0.010, 0.009, 0.009, 0.008)
 ) %>%
   mutate(
-    revenue = last_revenue * (1 + revenue_cagr)^forecast_index,
+    revenue = accumulate(revenue_growth, ~ .x * (1 + .y), .init = last_revenue)[-1],
     ebit = revenue * ebit_margin,
-    tax_rate = tax_rate_avg,
     nopat = ebit * (1 - tax_rate),
     depreciation = revenue * depreciation_ratio,
     capex = revenue * capex_ratio,
@@ -73,12 +58,17 @@ forecast_tbl <- tibble(
   ) %>%
   select(
     year,
+    revenue_growth,
     revenue,
+    ebit_margin,
     ebit,
     tax_rate,
     nopat,
+    depreciation_ratio,
     depreciation,
+    capex_ratio,
     capex,
+    wc_ratio,
     change_wc,
     fcff
   )
@@ -86,7 +76,7 @@ forecast_tbl <- tibble(
 # Cost of Equity
 
 risk_free_rate <- 0.04      # 4% risk-free rate (10-year treasury approx)
-market_return  <- 0.09      # assumed long-run market return 9%
+market_return  <- 0.08      # assumed long-run market return 9%
 
 cost_of_equity <- risk_free_rate + beta * (market_return - risk_free_rate)
 
@@ -96,7 +86,13 @@ print(cost_of_equity)
 # WACC Calculation
 
 # Assumptions
-cost_of_debt <- 0.04   # assumed cost of debt (can refine later)
+
+interest_expense <- tail(income_data$interestExpense, 1)
+debt_value <- tail(financials_clean$total_debt, 1)
+
+cost_of_debt <- interest_expense / debt_value
+print(cost_of_debt)
+
 tax_rate_avg <- mean(financials_clean$tax_rate, na.rm = TRUE)
 
 # Market value of equity
